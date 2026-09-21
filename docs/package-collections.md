@@ -35,7 +35,7 @@ python3 tools/collection_manager.py import collections/examples/data-science-sta
 python3 tools/collection_manager.py plan data-science-stack
 
 # Install the resolved package set through apt-get
-sudo python3 tools/collection_manager.py install data-science-stack --yes
+sudo python3 tools/collection_manager.py --store "$HOME/.local/share/cx/collections" install data-science-stack --yes
 
 # Export the resolved version for sharing
 python3 tools/collection_manager.py export 'data-science-stack@>=1.0.0,<2.0.0' ./data-science-stack.yaml
