@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import re
 import shutil
 import subprocess
@@ -23,7 +24,8 @@ class CollectionError(ValueError):
     """Raised for invalid collections or resolution/install failures."""
 
 
-@dataclass(frozen=True, order=True)
+@functools.total_ordering
+@dataclass(frozen=True)
 class Version:
     major: int
     minor: int
@@ -36,6 +38,34 @@ class Version:
         if not match:
             raise CollectionError(f"invalid semantic version: {value!r}")
         return cls(int(match[1]), int(match[2]), int(match[3]), match[4] or "")
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, Version):
+            return NotImplemented
+        core_self = (self.major, self.minor, self.patch)
+        core_other = (other.major, other.minor, other.patch)
+        if core_self != core_other:
+            return core_self < core_other
+        if self.prerelease == other.prerelease:
+            return False
+        if not self.prerelease:
+            return False
+        if not other.prerelease:
+            return True
+
+        left = self.prerelease.split(".")
+        right = other.prerelease.split(".")
+        for left_id, right_id in zip(left, right):
+            if left_id == right_id:
+                continue
+            left_numeric = left_id.isdigit()
+            right_numeric = right_id.isdigit()
+            if left_numeric and right_numeric:
+                return int(left_id) < int(right_id)
+            if left_numeric != right_numeric:
+                return left_numeric
+            return left_id < right_id
+        return len(left) < len(right)
 
 
 @dataclass(frozen=True)
@@ -105,6 +135,12 @@ def _parse_package(raw: Any) -> str:
         raise CollectionError(f"package entries may not contain whitespace: {package!r}")
     if package.startswith("-") or any(ch in package for ch in ";|&`$\n\r"):
         raise CollectionError(f"unsafe package entry: {package!r}")
+    if package.count("@") > 1:
+        raise CollectionError(f"invalid versioned package: {package!r}")
+    if "@" in package:
+        name, version = package.split("@", 1)
+        if not name or not version:
+            raise CollectionError(f"invalid versioned package: {package!r}")
     return package
 
 
@@ -238,13 +274,25 @@ class CollectionStore:
 
 
 def packages_for_plan(plan: Iterable[Collection]) -> list[str]:
-    seen: set[str] = set()
+    seen: dict[str, str | None] = {}
     result: list[str] = []
     for collection in plan:
         for package in collection.packages:
-            if package not in seen:
-                seen.add(package)
-                result.append(package)
+            if "@" in package:
+                package_name, requested_version = package.split("@", 1)
+            else:
+                package_name, requested_version = package, None
+
+            if package_name in seen:
+                if seen[package_name] != requested_version:
+                    previous = f"{package_name}@{seen[package_name]}" if seen[package_name] else package_name
+                    raise CollectionError(
+                        f"conflicting package requirements: {previous!r} and {package!r}"
+                    )
+                continue
+
+            seen[package_name] = requested_version
+            result.append(package)
     return result
 
 
