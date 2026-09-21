@@ -46,6 +46,9 @@ class CollectionManagerTests(unittest.TestCase):
             'collection: ok\nversion: 1.0\npackages: [curl]\n',
             'collection: ok\nversion: "1.0.0"\npackages: []\n',
             'collection: ok\nversion: "1.0.0"\npackages: ["bad;rm"]\n',
+            'collection: ok\nversion: "1.0.0"\npackages: ["foo@"]\n',
+            'collection: ok\nversion: "1.0.0"\npackages: ["@1.0"]\n',
+            'collection: ok\nversion: "1.0.0"\npackages: ["foo@bar@1.0"]\n',
             'collection: ok\nversion: "1.0.0"\npackages: [curl, curl]\n',
             'collection: ok\nversion: "1.0.0"\npackages: [curl]\nwat: 1\n',
             'collection: ok\nversion: "1.0.0"\npackages: [curl]\nconfigurations: []\n',
@@ -83,6 +86,23 @@ class CollectionManagerTests(unittest.TestCase):
         replaced = self.store.import_file(source_v1, replace=True)
         self.assertEqual(replaced.version_string, "1.0.0")
 
+    def test_semver_orders_stable_and_prerelease_identifiers(self):
+        versions = [
+            cm.Version.parse("1.0.0"),
+            cm.Version.parse("1.0.0-rc.2"),
+            cm.Version.parse("1.0.0-rc.10"),
+            cm.Version.parse("1.0.0-beta"),
+        ]
+        self.assertEqual(
+            [f"{v.major}.{v.minor}.{v.patch}" + (f"-{v.prerelease}" if v.prerelease else "") for v in sorted(versions)],
+            ["1.0.0-beta", "1.0.0-rc.2", "1.0.0-rc.10", "1.0.0"],
+        )
+
+    def test_resolve_prefers_stable_release_over_prerelease(self):
+        self.store.import_file(self.basic("tool", "1.0.0-rc.2"))
+        self.store.import_file(self.basic("tool", "1.0.0"))
+        self.assertEqual(self.store.resolve("tool").version_string, "1.0.0")
+
     def test_resolve_errors(self):
         with self.assertRaises(cm.CollectionError):
             self.store.resolve("bad name")
@@ -98,6 +118,21 @@ class CollectionManagerTests(unittest.TestCase):
         plan = self.store.plan("data")
         self.assertEqual([x.name for x in plan], ["base", "data"])
         self.assertEqual(cm.packages_for_plan(plan), ["curl", "git", "python3"])
+
+    def test_conflicting_package_versions_are_rejected(self):
+        first = cm.Collection(
+            "first", cm.Version.parse("1.0.0"), "", ("foo@1.0",), (), {}, Path("first.yaml")
+        )
+        second = cm.Collection(
+            "second", cm.Version.parse("1.0.0"), "", ("foo@2.0",), (), {}, Path("second.yaml")
+        )
+        unpinned = cm.Collection(
+            "unpinned", cm.Version.parse("1.0.0"), "", ("foo",), (), {}, Path("unpinned.yaml")
+        )
+        with self.assertRaisesRegex(cm.CollectionError, "conflicting package requirements"):
+            cm.packages_for_plan([first, second])
+        with self.assertRaisesRegex(cm.CollectionError, "conflicting package requirements"):
+            cm.packages_for_plan([first, unpinned])
 
     def test_dependency_cycle_and_missing_dependency(self):
         self.store.import_file(write_collection(self.root, 'collection: a\nversion: "1.0.0"\npackages: [a]\ndependencies: [b]\n', "a.yaml"))
